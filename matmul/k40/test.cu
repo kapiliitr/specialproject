@@ -62,7 +62,7 @@ __global__ void gpuMM_um(double *A, double *B, double *C, LONG N)
 int main(int argc, char *argv[])
 {
 	struct timeval t1,t2, tnp, tp;
-	double tt, gflops, tpre, tnpre, tmgm;
+	double tt, gflops, tpre, tprenk, tnpre, tmgm;
 
 	/*if(argc != 3)
 	{
@@ -118,7 +118,7 @@ int main(int argc, char *argv[])
 
 	double *dA,*dB,*dC,*dAT,*dCT;
 
-	/* With prefetching begins  */
+	/* With prefetching and launching kernel as well begins  */
 
 	CUDA_SAFE_CALL(cudaMallocHost(&dB,size));
 	CUDA_SAFE_CALL(cudaMallocHost(&dA,(S*size/N)));
@@ -194,6 +194,90 @@ int main(int argc, char *argv[])
 	gflops = ( 1.0e-9 * 2.0 * N * N * N ) / tt; 
 	//cout << "Prefetch : " << gflops << " Time : " << tt << " s"  << endl; 
 	tpre = tt;
+
+	for(int i = 0; i < (N/S); i++)
+	{
+		CUDA_SAFE_CALL(cudaStreamDestroy(str[i]));
+		CUDA_SAFE_CALL(cudaEventDestroy(evt[i]));
+	}
+
+	CUDA_SAFE_CALL(cudaFreeHost(dB));
+	CUDA_SAFE_CALL(cudaFreeHost(dA));
+	CUDA_SAFE_CALL(cudaFreeHost(dC));
+	CUDA_SAFE_CALL(cudaFreeHost(dAT));
+	CUDA_SAFE_CALL(cudaFreeHost(dCT));
+
+	/* With prefetching only begins  */
+
+	CUDA_SAFE_CALL(cudaMallocHost(&dB,size));
+	CUDA_SAFE_CALL(cudaMallocHost(&dA,(S*size/N)));
+	CUDA_SAFE_CALL(cudaMallocHost(&dC,(S*size/N)));
+	CUDA_SAFE_CALL(cudaMallocHost(&dAT,(S*size/N)));
+	CUDA_SAFE_CALL(cudaMallocHost(&dCT,(S*size/N)));
+	
+	cudaStream_t s1,s2,s3;
+	cudaEvent_t e1,e2,e3;
+
+	CUDA_SAFE_CALL(cudaStreamCreate(&s1));
+	CUDA_SAFE_CALL(cudaStreamCreate(&s2));
+	CUDA_SAFE_CALL(cudaStreamCreate(&s3));
+
+	CUDA_SAFE_CALL(cudaEventCreate(&e1));
+	CUDA_SAFE_CALL(cudaEventCreate(&e2));
+	CUDA_SAFE_CALL(cudaEventCreate(&e3));
+
+	gettimeofday(&t1,0);
+
+	// Copy matrices from the host to device
+	CUDA_SAFE_CALL(cudaMemcpyAsync(dB,hB,size,cudaMemcpyHostToDevice,s1));
+
+	CUDA_SAFE_CALL(cudaMemcpyAsync(dA,hA,S*(size/N),cudaMemcpyHostToDevice,s1));
+	CUDA_SAFE_CALL(cudaEventRecord(e1,s1));
+	CUDA_SAFE_CALL(cudaStreamWaitEvent(s2,e1,0));
+	gpuMM<<<grid,threadBlock,0,s2>>>(dA,dB,dC,N);
+	CUDA_SAFE_CALL(cudaEventRecord(e2,s2));
+	for(LONG i=1; i< (N/S); i++){
+		//Wait for previous stream to finish executing the kernel
+		CUDA_SAFE_CALL(cudaStreamWaitEvent(s1,e2,0));
+
+		// Prefetch the next set of rows
+		CUDA_SAFE_CALL(cudaMemcpyAsync(dA,hA+i*N*S,(S*size/N),cudaMemcpyHostToDevice,s1));
+
+		CUDA_SAFE_CALL(cudaEventRecord(e1,s1));
+
+		CUDA_SAFE_CALL(cudaStreamWaitEvent(s3,e2,0));
+		
+		// Now copy the GPU result back to CPU
+		CUDA_SAFE_CALL(cudaMemcpyAsync(C+(i-1)*N*S,dC,(S*size/N),cudaMemcpyDeviceToHost,s3));
+
+		CUDA_SAFE_CALL(cudaEventRecord(e3,s3));
+
+		CUDA_SAFE_CALL(cudaStreamWaitEvent(s2,e1,0));
+		CUDA_SAFE_CALL(cudaStreamWaitEvent(s2,e3,0));
+
+		gpuMM<<<grid,threadBlock,0,s2>>>(dA,dB,dC,N);
+
+		CUDA_SAFE_CALL(cudaEventRecord(e2,s2));
+	}
+	CUDA_SAFE_CALL(cudaStreamWaitEvent(s3,e2,0));
+	CUDA_SAFE_CALL(cudaMemcpyAsync(C+((N/S)-1)*N*S,dC,(S*size/N),cudaMemcpyDeviceToHost,s3));
+
+	CUDA_SAFE_CALL(cudaDeviceSynchronize());
+
+	gettimeofday(&t2,0);
+	timersub(&t2,&t1,&tp);
+
+	tt = (double) tp.tv_sec + ((double) tp.tv_usec/1.0e6);
+	gflops = ( 1.0e-9 * 2.0 * N * N * N ) / tt; 
+	//cout << "Prefetch : " << gflops << " Time : " << tt << " s"  << endl; 
+	tprenk = tt;
+
+	CUDA_SAFE_CALL(cudaStreamDestroy(s1));
+	CUDA_SAFE_CALL(cudaStreamDestroy(s2));
+	CUDA_SAFE_CALL(cudaStreamDestroy(s3));
+	CUDA_SAFE_CALL(cudaEventDestroy(e1));
+	CUDA_SAFE_CALL(cudaEventDestroy(e2));
+	CUDA_SAFE_CALL(cudaEventDestroy(e3));
 
 	CUDA_SAFE_CALL(cudaFreeHost(dB));
 	CUDA_SAFE_CALL(cudaFreeHost(dA));
@@ -271,13 +355,7 @@ int main(int argc, char *argv[])
 	CUDA_SAFE_CALL(cudaFree(dC));
 #endif
 
-	cout << N << "x" << N << " " << tpre << " " << tnpre << " " << tmgm << endl;
-
-	for(int i = 0; i < (N/S); i++)
-	{
-		CUDA_SAFE_CALL(cudaStreamDestroy(str[i]));
-		CUDA_SAFE_CALL(cudaEventDestroy(evt[i]));
-	}
+	cout << N << "x" << N << " " << tpre << " " << tprenk << " " << tnpre << " " << tmgm << endl;
 
 	delete [] hA;
 	delete [] hB;
