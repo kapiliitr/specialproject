@@ -77,8 +77,7 @@ int main(int argc, char *argv[])
 	//K = atoi(argv[1]);
 	//S = atoi(argv[2]);
 	S = atoi(argv[1]);
-//	for(K=50; K<=600; K+=50)
-	for(K=1; K<=5; K++)
+	for(K=50; K<=400; K+=50)
 	{
 	N = K*BLOCK_SIZE;
 	if(N%S)
