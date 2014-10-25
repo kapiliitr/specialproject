@@ -46,7 +46,7 @@ __global__ void init(int * vertices, int starting_vertex, int num_vertices)
 	int v = blockDim.x*blockIdx.x + threadIdx.x;
 	if (v==starting_vertex)
 		vertices[v] = 0;
-	else
+	else if(v < num_vertices)
 		vertices[v] = -1;
 }
 
@@ -108,17 +108,10 @@ int main(int argc, char * argv[])
 
 	CUDA_SAFE_CALL(cudaMallocManaged((void **)&(graph_host->to), num_edges*sizeof(int *)));
 
-	j = 0;
-	for(i=0; i<num_vertices; i++)
+	for(i=0; i<num_edges; i++)
 	{
-		int edges_per_vertex, prefix;
-		fscanf(fp,"%d",&edges_per_vertex);
-		prefix = j + edges_per_vertex;
-		for(; j < prefix; j++)
-		{
-			graph_host->from[j] = i;
-			fscanf(fp,"%d",&graph_host->to[j]);
-		}
+		fscanf(fp,"%d",&graph_host->from[i]);
+		fscanf(fp,"%d",&graph_host->to[i]);
 	}
 
 	/*****************************************************
@@ -164,7 +157,6 @@ int main(int argc, char * argv[])
 	{
 		stop = false;
 		CUDA_SAFE_CALL(cudaMemcpyToSymbol(d_over, &stop, sizeof(bool),0, cudaMemcpyHostToDevice));
-		reset<<<1,1>>>();
 		CUDA_SAFE_CALL(cudaDeviceSynchronize());
 
 		CUDA_SAFE_CALL(cudaEventRecord(start,0));

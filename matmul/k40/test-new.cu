@@ -108,7 +108,7 @@ int main(int argc, char *argv[])
 
 	// Allocate memory on the device
 	LONG size = N*N*sizeof(double);	// Size of the memory in bytes
-	
+#if 0	
 	// Now do the matrix multiplication on the CPU
 	double sum;
 	for (LONG row=0; row<N; row++){
@@ -120,7 +120,7 @@ int main(int argc, char *argv[])
 			hC[row*N+col] = sum;
 		}
 	}
-
+#endif
 	// Allocate memory to store the GPU answer on the host
 	double *C;
 	C = new double[N*N];	

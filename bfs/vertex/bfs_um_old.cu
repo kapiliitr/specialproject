@@ -46,7 +46,7 @@ __global__ void init(int * vertices, int starting_vertex, int num_vertices)
 	int v = blockDim.x*blockIdx.x + threadIdx.x;
 	if (v==starting_vertex)
 		vertices[v] = 0;
-	else if(v < num_vertices)
+	else
 		vertices[v] = -1;
 }
 
@@ -114,7 +114,7 @@ int main(int argc, char * argv[])
 
 	CUDA_SAFE_CALL(cudaMallocManaged((void **)&(graph_host->adj), num_edges*sizeof(int *)));
 
-/*	for(i=0; i<num_vertices; i++)
+	for(i=0; i<num_vertices; i++)
 	{
 		int edges_per_vertex;
 		fscanf(fp,"%d",&edges_per_vertex);
@@ -133,67 +133,6 @@ int main(int argc, char * argv[])
 			fscanf(fp,"%d",&graph_host->adj[j]);
 		}
 	}
-*/
-
-	/*
-	   It has been assumed that the source vertices are in sorted order
-	 */
-	int * temp_adj = (int *) malloc(num_vertices*sizeof(int));
-	int s,d,c=0,ps=0,jt;
-	for(i=0; i<num_edges; i++)
-	{
-		fscanf(fp,"%d %d",&s,&d);
-		if(ps == s)
-		{
-			temp_adj[c] = d;
-			c++;
-		}
-		else
-		{
-			if(ps>0)
-			{
-				graph_host->adj_prefix_sum[ps] = graph_host->adj_prefix_sum[ps-1]+c;
-				j = graph_host->adj_prefix_sum[ps-1];
-			}
-			else
-			{
-				graph_host->adj_prefix_sum[ps] = c;
-				j = 0;
-			}
-			jt = j;
-			for(; j<graph_host->adj_prefix_sum[ps]; j++)
-			{
-				graph_host->adj[j] = temp_adj[j-jt];
-			}
-
-			temp_adj[0] = d;
-			c=1;
-			while((++ps)<s)
-			{
-				graph_host->adj_prefix_sum[ps] = graph_host->adj_prefix_sum[ps-1];
-			}
-		}
-	}
-	if(ps>0)
-	{
-		graph_host->adj_prefix_sum[ps] = graph_host->adj_prefix_sum[ps-1]+c;
-		j = graph_host->adj_prefix_sum[ps-1];
-	}
-	else
-	{
-		graph_host->adj_prefix_sum[ps] = c;
-		j = 0;
-	}
-	jt = j;
-	for(; j<graph_host->adj_prefix_sum[ps]; j++)
-	{
-		graph_host->adj[j] = temp_adj[j-jt];
-	}
-	while((++ps)<num_vertices)
-	{
-		graph_host->adj_prefix_sum[ps] = graph_host->adj_prefix_sum[ps-1];
-	}
-
 
 	/*****************************************************
 	XXX: GPU does not know the size of each adjacency list.
@@ -206,8 +145,8 @@ int main(int argc, char * argv[])
 	size of each list.
 	*****************************************************/
 
-	//temp_kernel<<<1,1>>>(graph_host);
-	
+	//temp_kernel<<<1,1>>>(graph_device);
+
 	int num_of_blocks = 1;
 	int num_of_threads_per_block = num_vertices;
 
@@ -238,6 +177,7 @@ int main(int argc, char * argv[])
 	{
 		stop = false;
 		CUDA_SAFE_CALL(cudaMemcpyToSymbol(d_over, &stop, sizeof(bool),0, cudaMemcpyHostToDevice));
+		reset<<<1,1>>>();
 		CUDA_SAFE_CALL(cudaDeviceSynchronize());
 
 		CUDA_SAFE_CALL(cudaEventRecord(start,0));
@@ -267,6 +207,6 @@ int main(int argc, char * argv[])
 
 	CUDA_SAFE_CALL(cudaEventDestroy(start));
 	CUDA_SAFE_CALL(cudaEventDestroy(end));
-	
+
 	return 0;
 }
