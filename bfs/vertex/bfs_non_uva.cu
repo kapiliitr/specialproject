@@ -21,13 +21,6 @@ typedef struct __graph
 	int *adj;
 } graph_t;
 
-__device__ bool d_over;
-
-__global__ void reset()
-{
-	d_over = false;
-}
-
 __global__ void temp_kernel(graph_t * graph) 
 {
 	int id = blockDim.x*blockIdx.x + threadIdx.x;
@@ -49,7 +42,7 @@ __global__ void init(int * vertices, int starting_vertex, int num_vertices)
 		vertices[v] = -1;
 }
 
-__global__ void bfs(const graph_t * graph, int * vertices, int current_depth)
+__global__ void bfs(const graph_t * graph, int * vertices, int current_depth, bool * d_over)
 {
 	int id = blockDim.x*blockIdx.x + threadIdx.x;
 	if(id < graph->V)
@@ -66,7 +59,7 @@ __global__ void bfs(const graph_t * graph, int * vertices, int current_depth)
 				if(vertices[graph->adj[i]] == -1)
 				{
 					vertices[graph->adj[i]] = current_depth+1;
-					d_over = true;
+					*d_over = true;
 				}
 			}
 		}
@@ -87,7 +80,7 @@ int main(int argc, char * argv[])
 	}
 	else
 	{
-		filename = "input.txt";
+		filename = "../data/input.txt";
 	}
 
 	FILE * fp = fopen(filename,"r");
@@ -97,22 +90,14 @@ int main(int argc, char * argv[])
 		exit(-1);
 	}
 
-	/* Set cuda device to K40  */
-	CUDA_SAFE_CALL(cudaSetDevice(0));
-
 	/* Get graph from file into CPU memory  */
 	int num_vertices, num_edges, i, j;
 	fscanf(fp,"%d %d",&num_vertices,&num_edges);
 
-	graph_t *graph_host;
-	CUDA_SAFE_CALL(cudaMallocManaged((void **)&graph_host, sizeof(graph_t)));
-
+	graph_t *graph_host = (graph_t *) malloc(sizeof(graph_t));
 	graph_host->V = num_vertices;
-
-	CUDA_SAFE_CALL(cudaMallocManaged((void **)&(graph_host->adj_prefix_sum), num_vertices*sizeof(int)));
-
-	CUDA_SAFE_CALL(cudaMallocManaged((void **)&(graph_host->adj), num_edges*sizeof(int *)));
-
+	graph_host->adj_prefix_sum = (int *) calloc(num_vertices, sizeof(int));
+	graph_host->adj = (int *) malloc(num_edges*sizeof(int *));
 	for(i=0; i<num_vertices; i++)
 	{
 		int edges_per_vertex;
@@ -132,6 +117,20 @@ int main(int argc, char * argv[])
 			fscanf(fp,"%d",&graph_host->adj[j]);
 		}
 	}
+
+	/* Transfer graph data from CPU to GPU memory  */
+	graph_t *graph_device;
+	int *d_adj_prefix_sum;
+	int *d_adj;
+
+	CUDA_SAFE_CALL(cudaMalloc((void **)&graph_device, sizeof(graph_t)));
+	CUDA_SAFE_CALL(cudaMalloc((void **)&d_adj_prefix_sum, num_vertices*sizeof(int)));
+	CUDA_SAFE_CALL(cudaMalloc((void **)&d_adj, num_edges*sizeof(int)));
+	CUDA_SAFE_CALL(cudaMemcpy(graph_device, graph_host, sizeof(graph_t), cudaMemcpyHostToDevice)); //Copy the graph
+	CUDA_SAFE_CALL(cudaMemcpy(d_adj_prefix_sum, graph_host->adj_prefix_sum, num_vertices*sizeof(int), cudaMemcpyHostToDevice));
+	CUDA_SAFE_CALL(cudaMemcpy(&(graph_device->adj_prefix_sum), &d_adj_prefix_sum, sizeof(int *), cudaMemcpyHostToDevice)); //Copy the poiner to adj
+	CUDA_SAFE_CALL(cudaMemcpy(d_adj, graph_host->adj, num_edges*sizeof(int), cudaMemcpyHostToDevice));
+	CUDA_SAFE_CALL(cudaMemcpy(&(graph_device->adj), &d_adj, sizeof(int *), cudaMemcpyHostToDevice)); //Copy the poiner to adj
 
 	/*****************************************************
 	XXX: GPU does not know the size of each adjacency list.
@@ -156,7 +155,9 @@ int main(int argc, char * argv[])
 	}
 
 	int * vertices_host;
-	CUDA_SAFE_CALL(cudaMallocManaged((void **)&vertices_host, num_vertices*sizeof(int)));
+	int * vertices_device;
+	vertices_host = (int *) malloc(num_vertices * sizeof(int));
+	CUDA_SAFE_CALL(cudaMalloc((void **)&vertices_device, num_vertices * sizeof(int)));
 
 	dim3  grid( num_of_blocks, 1, 1);
 	dim3  threads( num_of_threads_per_block, 1, 1);
@@ -168,29 +169,31 @@ int main(int argc, char * argv[])
 	CUDA_SAFE_CALL(cudaEventCreate(&start));
 	CUDA_SAFE_CALL(cudaEventCreate(&end));
 
-	init<<<grid,threads>>> (vertices_host, 0, num_vertices);
+	init<<<grid,threads>>> (vertices_device, 0, num_vertices);
 
 	bool stop;
+	bool * d_over;
+	CUDA_SAFE_CALL(cudaMalloc((void **)&d_over, sizeof(bool)));
+	
 	int k=0;
 	do
 	{
 		stop = false;
-		CUDA_SAFE_CALL(cudaMemcpyToSymbol(d_over, &stop, sizeof(bool),0, cudaMemcpyHostToDevice));
-		reset<<<1,1>>>();
-		CUDA_SAFE_CALL(cudaDeviceSynchronize());
+		CUDA_SAFE_CALL(cudaMemcpy(d_over, &stop, sizeof(bool), cudaMemcpyHostToDevice));
 
 		CUDA_SAFE_CALL(cudaEventRecord(start,0));
-					
-		bfs<<<grid, threads>>> (graph_host, vertices_host, k);
+		bfs<<<grid, threads>>> (graph_device, vertices_device, k, d_over);
 		CUDA_SAFE_CALL(cudaDeviceSynchronize());
 		CUDA_SAFE_CALL(cudaEventRecord(end,0));
 		CUDA_SAFE_CALL(cudaEventSynchronize(end));
 		CUDA_SAFE_CALL(cudaEventElapsedTime(&diff, start, end));
 		time += diff*1.0e-3;
 
-		CUDA_SAFE_CALL(cudaMemcpyFromSymbol(&stop, d_over, sizeof(bool),0, cudaMemcpyDeviceToHost));
+		CUDA_SAFE_CALL(cudaMemcpy(&stop, d_over, sizeof(bool), cudaMemcpyDeviceToHost));
 		k++;
 	}while(stop);
+
+	CUDA_SAFE_CALL(cudaMemcpy((void *)vertices_host, (void *) vertices_device, num_vertices * sizeof(int), cudaMemcpyDeviceToHost));
 
 	printf("Number of iterations : %d\n",k);
 	for(int i = 0; i < num_vertices; i++)
@@ -199,13 +202,13 @@ int main(int argc, char * argv[])
 	}
 	printf("Time: %f ms\n",time);
 
-	CUDA_SAFE_CALL(cudaFree(vertices_host));
-	CUDA_SAFE_CALL(cudaFree(graph_host->adj));
-	CUDA_SAFE_CALL(cudaFree(graph_host->adj_prefix_sum));
-	CUDA_SAFE_CALL(cudaFree(graph_host));
-
-	CUDA_SAFE_CALL(cudaEventDestroy(start));
-	CUDA_SAFE_CALL(cudaEventDestroy(end));
+	CUDA_SAFE_CALL(cudaFree(vertices_device));
+	CUDA_SAFE_CALL(cudaFree(d_adj));
+	CUDA_SAFE_CALL(cudaFree(d_adj_prefix_sum));
+	CUDA_SAFE_CALL(cudaFree(graph_device));
+	
+	free(vertices_host);
+	free(graph_host);
 
 	return 0;
 }

@@ -62,7 +62,7 @@ int main(int argc, char * argv[])
 	}
 	else
 	{
-		filename = "input.txt";
+		filename = "../data/input.txt";
 	}
 
 	FILE * fp = fopen(filename,"r");
