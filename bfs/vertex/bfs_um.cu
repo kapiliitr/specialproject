@@ -1,3 +1,7 @@
+/*
+ This code has the assumption that the source vertices are sorted in the input file
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <cuda.h>
@@ -142,7 +146,8 @@ int main(int argc, char * argv[])
 	int s,d,c=0,ps=0,jt;
 	for(i=0; i<num_edges; i++)
 	{
-		fscanf(fp,"%d %d",&s,&d);
+		fscanf(fp,"%d",&s);
+		fscanf(fp,"%d",&d);
 		if(ps == s)
 		{
 			temp_adj[c] = d;
@@ -150,6 +155,7 @@ int main(int argc, char * argv[])
 		}
 		else
 		{
+			//printf("%d %d %d\n",i,ps,s);
 			if(ps>0)
 			{
 				graph_host->adj_prefix_sum[ps] = graph_host->adj_prefix_sum[ps-1]+c;
@@ -193,7 +199,6 @@ int main(int argc, char * argv[])
 	{
 		graph_host->adj_prefix_sum[ps] = graph_host->adj_prefix_sum[ps-1];
 	}
-
 
 	/*****************************************************
 	XXX: GPU does not know the size of each adjacency list.

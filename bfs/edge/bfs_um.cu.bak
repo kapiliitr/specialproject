@@ -46,7 +46,7 @@ __global__ void init(int * vertices, int starting_vertex, int num_vertices)
 	int v = blockDim.x*blockIdx.x + threadIdx.x;
 	if (v==starting_vertex)
 		vertices[v] = 0;
-	else
+	else if(v < num_vertices)
 		vertices[v] = -1;
 }
 
