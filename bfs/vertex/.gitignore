@@ -1,2 +1,3 @@
-*.out
-bfs_um
+*
+!*.cu*
+!.gitignore

@@ -1,11 +1,13 @@
-/*
- This code has the assumption that the source vertices are sorted in the input file
- Also, the vertices are 0 indexed
- */
-
+#include <iostream>
+#include <map>
+#include <set>
+#include <vector>
+#include <algorithm>
 #include <stdio.h>
 #include <stdlib.h>
 #include <cuda.h>
+
+using namespace std;
 
 #define CUDA_SAFE_CALL( err ) (safe_call(err, __LINE__))
 #define MAX_THREADS_PER_BLOCK 1024
@@ -21,9 +23,9 @@ void safe_call(cudaError_t ret, int line)
 
 typedef struct __graph
 {
-	int V;
-	int *adj_prefix_sum;
-	int *adj;
+	int E;
+	int *from;
+	int *to;
 } graph_t;
 
 __device__ bool d_over;
@@ -34,7 +36,7 @@ __global__ void reset()
 }
 
 // Print the graph
-__global__ void temp_kernel(graph_t * graph) 
+/*__global__ void temp_kernel(graph_t * graph) 
 {
 	int id = blockDim.x*blockIdx.x + threadIdx.x;
 	if(id == 0)
@@ -44,7 +46,7 @@ __global__ void temp_kernel(graph_t * graph)
 			printf("%d ",graph->adj[j]);
 		printf("\n");
 	}
-}
+}*/
 
 __global__ void init(int * vertices, int starting_vertex, int num_vertices)
 {
@@ -58,22 +60,16 @@ __global__ void init(int * vertices, int starting_vertex, int num_vertices)
 __global__ void bfs(const graph_t * graph, int * vertices, int current_depth)
 {
 	int id = blockDim.x*blockIdx.x + threadIdx.x;
-	if(id < graph->V)
+	if(id < graph->E)
 	{
-		if(vertices[id] == current_depth)
+		int f = graph->from[id];
+		if(vertices[f] == current_depth)
 		{
-			int i;
-			if(id == 0) 
-				i = 0;
-			else
-				i = graph->adj_prefix_sum[id-1];
-			for(; i < graph->adj_prefix_sum[id]; i++)
+			int e = graph->to[id];
+			if(vertices[e] == -1)
 			{
-				if(vertices[graph->adj[i]] == -1)
-				{
-					vertices[graph->adj[i]] = current_depth+1;
-					d_over = true;
-				}
+				vertices[e] = current_depth+1;
+				d_over = true;
 			}
 		}
 	}
@@ -111,95 +107,53 @@ int main(int argc, char * argv[])
 	fscanf(fp,"%d %d",&num_vertices,&num_edges);
 
 	graph_t *graph_host;
-	CUDA_SAFE_CALL(cudaMallocManaged((void **)&graph_host, sizeof(graph_t)));
+	CUDA_SAFE_CALL(cudaMallocHost((void **)&graph_host, sizeof(graph_t)));
 
-	graph_host->V = num_vertices;
+	graph_host->E = num_edges;
 
-	CUDA_SAFE_CALL(cudaMallocManaged((void **)&(graph_host->adj_prefix_sum), num_vertices*sizeof(int)));
+	CUDA_SAFE_CALL(cudaMallocHost((void **)&(graph_host->from), num_edges*sizeof(int)));
 
-	CUDA_SAFE_CALL(cudaMallocManaged((void **)&(graph_host->adj), num_edges*sizeof(int *)));
+	CUDA_SAFE_CALL(cudaMallocHost((void **)&(graph_host->to), num_edges*sizeof(int *)));
 
-/*	for(i=0; i<num_vertices; i++)
-	{
-		int edges_per_vertex;
-		fscanf(fp,"%d",&edges_per_vertex);
-		if(i>0)
-		{
-			graph_host->adj_prefix_sum[i] = graph_host->adj_prefix_sum[i-1]+edges_per_vertex;
-			j = graph_host->adj_prefix_sum[i-1];
-		}
-		else
-		{
-			graph_host->adj_prefix_sum[i] = edges_per_vertex;
-			j = 0;
-		}
-		for(; j<graph_host->adj_prefix_sum[i]; j++)
-		{
-			fscanf(fp,"%d",&graph_host->adj[j]);
-		}
-	}
-*/
-
-	/*
-	   It has been assumed that the source vertices are in sorted order
-	 */
-	int * temp_adj = (int *) malloc(num_vertices*sizeof(int));
-	int s,d,c=0,ps=0,jt;
+	set<int> vertices;
+	vector< pair<int,int> > edges;
+	int s,d;
 	for(i=0; i<num_edges; i++)
 	{
 		fscanf(fp,"%d",&s);
 		fscanf(fp,"%d",&d);
-		if(ps == s)
-		{
-			temp_adj[c] = d;
-			c++;
-		}
-		else
-		{
-			//printf("%d %d %d\n",i,ps,s);
-			if(ps>0)
-			{
-				graph_host->adj_prefix_sum[ps] = graph_host->adj_prefix_sum[ps-1]+c;
-				j = graph_host->adj_prefix_sum[ps-1];
-			}
-			else
-			{
-				graph_host->adj_prefix_sum[ps] = c;
-				j = 0;
-			}
-			jt = j;
-			for(; j<graph_host->adj_prefix_sum[ps]; j++)
-			{
-				graph_host->adj[j] = temp_adj[j-jt];
-			}
+		vertices.insert(s);
+		vertices.insert(d);
+		edges.push_back(make_pair(s,d));
+	}
 
-			temp_adj[0] = d;
-			c=1;
-			while((++ps)<s)
-			{
-				graph_host->adj_prefix_sum[ps] = graph_host->adj_prefix_sum[ps-1];
-			}
+	sort(edges.begin(),edges.end());
+
+	i=0;
+	//int l=0,r=0;
+	//set<int>::iterator fe=vertices.begin();
+	//set<int>::iterator se=vertices.begin();
+	for(vector< pair<int,int> >::iterator it = edges.begin() ; it != edges.end(); ++it)
+	{
+	/*	while((*fe)!=(*it).first && fe!=vertices.end()) 
+		{
+			l++;
+			se = vertices.begin();
+			r=0;
 		}
+		while((*se)!=(*it).second && se!=vertices.end())
+		{
+			r++;
+		}
+		*/
+		int l = distance(vertices.begin(),vertices.find((*it).first)); // C++ set stores in sorted order by default
+		int r = distance(vertices.begin(),vertices.find((*it).second));
+
+		graph_host->from[i]=l;
+		graph_host->to[i]=r;
+		i++;
 	}
-	if(ps>0)
-	{
-		graph_host->adj_prefix_sum[ps] = graph_host->adj_prefix_sum[ps-1]+c;
-		j = graph_host->adj_prefix_sum[ps-1];
-	}
-	else
-	{
-		graph_host->adj_prefix_sum[ps] = c;
-		j = 0;
-	}
-	jt = j;
-	for(; j<graph_host->adj_prefix_sum[ps]; j++)
-	{
-		graph_host->adj[j] = temp_adj[j-jt];
-	}
-	while((++ps)<num_vertices)
-	{
-		graph_host->adj_prefix_sum[ps] = graph_host->adj_prefix_sum[ps-1];
-	}
+
 
 	/*****************************************************
 	XXX: GPU does not know the size of each adjacency list.
@@ -212,19 +166,19 @@ int main(int argc, char * argv[])
 	size of each list.
 	*****************************************************/
 
-	//temp_kernel<<<1,1>>>(graph_host);
-	
-	int num_of_blocks = 1;
-	int num_of_threads_per_block = num_vertices;
+	//temp_kernel<<<1,1>>>(graph_device);
 
-	if(num_vertices>MAX_THREADS_PER_BLOCK)
+	int num_of_blocks = 1;
+	int num_of_threads_per_block = num_edges;
+
+	if(num_edges > MAX_THREADS_PER_BLOCK)
 	{
-		num_of_blocks = (int)ceil(num_vertices/(double)MAX_THREADS_PER_BLOCK); 
+		num_of_blocks = (int)ceil(num_edges/(double)MAX_THREADS_PER_BLOCK); 
 		num_of_threads_per_block = MAX_THREADS_PER_BLOCK; 
 	}
 
 	int * vertices_host;
-	CUDA_SAFE_CALL(cudaMallocManaged((void **)&vertices_host, num_vertices*sizeof(int)));
+	CUDA_SAFE_CALL(cudaMallocHost((void **)&vertices_host, num_vertices*sizeof(int)));
 
 	dim3  grid( num_of_blocks, 1, 1);
 	dim3  threads( num_of_threads_per_block, 1, 1);
@@ -266,13 +220,13 @@ int main(int argc, char * argv[])
 	}
 	printf("Time: %f ms\n",time);
 
-	CUDA_SAFE_CALL(cudaFree(vertices_host));
-	CUDA_SAFE_CALL(cudaFree(graph_host->adj));
-	CUDA_SAFE_CALL(cudaFree(graph_host->adj_prefix_sum));
-	CUDA_SAFE_CALL(cudaFree(graph_host));
+	CUDA_SAFE_CALL(cudaFreeHost(vertices_host));
+	CUDA_SAFE_CALL(cudaFreeHost(graph_host->from));
+	CUDA_SAFE_CALL(cudaFreeHost(graph_host->to));
+	CUDA_SAFE_CALL(cudaFreeHost(graph_host));
 
 	CUDA_SAFE_CALL(cudaEventDestroy(start));
 	CUDA_SAFE_CALL(cudaEventDestroy(end));
-	
+
 	return 0;
 }
