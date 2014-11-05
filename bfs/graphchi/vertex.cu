@@ -21,7 +21,7 @@ void safe_call(cudaError_t ret, int line)
 	}
 }
 
-typedef __interval
+typedef struct __interval
 {
 	int start;
 	int end;
@@ -31,28 +31,31 @@ typedef struct __edge
 {
 	int src;
 	int dest;
+	int val;
 } edge_t;
-
+/*
 typedef struct __vertex
 {
 	int val;
 	edge_t * inEdges;
 	edge_t * outEdges;
 } vertex_t;
-
-typedef __shard
+*/
+typedef struct __shard
 {
-	int * intervalEdgeMap;
+	int numE;
+	int * vertices;
+	int * vertexEdgeMap;
 	edge_t * edges;
 } shard_t;
-
+/*
 typedef struct __graph
 {
 	vertex_t * vertices;
 } graph_t;
 
 graph_t * load_subgraph(interval_t, vector<edge_t>);
-
+*/
 __device__ bool d_over;
 
 __global__ void reset()
@@ -60,6 +63,54 @@ __global__ void reset()
 	d_over = false;
 }
 
+__global__ void bfs(const shard_t * shard, int V)
+{
+	int i,j,t;
+	int id = blockDim.x*blockIdx.x + threadIdx.x;
+	if(id < V)
+	{
+		int interval_no = id/blockDim.x;
+
+		if(shard[interval_no].vertices[threadIdx.x] == -1)
+		{
+			int minLevel = INT_MAX;
+			for(i=0;i<shard[interval_no].numE;i++)
+			{
+				if(shard[interval_no].edges[i].dest == id)
+				{
+					t = shard[interval_no].edges[i].val;
+					if(t>=0 && t < minLevel)
+					{
+						minLevel = t;
+					}
+				}
+			}
+			if(minLevel==INT_MAX) { minLevel=-1; }
+			if(minLevel >= 0)
+			{
+				shard[interval_no].vertices[threadIdx.x] = minLevel+1;
+				d_over = true;
+				for(i=0;i<gridDim.x;i++)
+				{
+					if(id==0)
+						j=0;
+					else
+						j=shard[i].vertexEdgeMap[id-1];
+					for(;j<shard[i].vertexEdgeMap[id];j++)
+					{
+						shard[i].edges[j].val = minLevel+1;
+					}
+				}
+			}
+		}
+	}
+}
+
+bool cost(const edge_t &a, const edge_t &b)
+{
+	    //return ((a.src < b.src) || (a.src == b.src && a.dest < b.dest));
+	    return (a.src < b.src);
+}
 
 int main(int argc, char * argv[])
 {
@@ -85,52 +136,85 @@ int main(int argc, char * argv[])
 	CUDA_SAFE_CALL(cudaSetDevice(0));
 
 	/* Get graph from file into CPU memory  */
-	int num_vertices, num_edges, i, j;
+	int num_vertices, num_edges, i, j, k;
 	fscanf(fp,"%d %d",&num_vertices,&num_edges);
 
-	// Assuming only 1 GB of memory
-	int edges_per_vertex= num_edges/num_vertices;
-	int num_vertex_interval = (2 << 30) / (edges_per_vertex*sizeof(edge_t));
-	int num_interval = num_vertices/num_vertex_interval;
+	//Each shard will have MAX_THREADS_PER_BLOCK number of vertices
+	int num_of_blocks = 1;
+	int num_of_threads_per_block = num_vertices;
 
-	interval_t * interval = (interval_t *) malloc(num_interval*sizeof(interval_t));
-	for(i=0; i<num_interval; i++)
+	if(num_vertices>MAX_THREADS_PER_BLOCK)
 	{
-		interval[i].start=i*num_vertex_interval;
-		int t=(i+1)*num_vertex_interval-1;
+		num_of_blocks = (int)ceil(num_vertices/(double)MAX_THREADS_PER_BLOCK); 
+		num_of_threads_per_block = MAX_THREADS_PER_BLOCK; 
+	}
+
+	dim3  grid( num_of_blocks, 1, 1);
+	dim3  threads( num_of_threads_per_block, 1, 1);
+
+	interval_t * interval = (interval_t *) malloc(num_of_blocks*sizeof(interval_t));
+	for(i=0; i<num_of_blocks; i++)
+	{
+		interval[i].start=i*num_of_threads_per_block;
+		int t=(i+1)*num_of_threads_per_block-1;
 		interval[i].end=(t > num_vertices) ? num_vertices : t;
 	}
 
-	shard_t * shard = (shard_t *) malloc(num_interval*shard_t);
-
-	set<int> vertices;
-	vector<edge_t> * edges = (vector<edge_t> *) malloc(num_interval*sizeof(vector<edge_t>));
+	vector< vector<edge_t> > edges(num_of_blocks);
 	int s,d;
-	for(i=0; i<num_edges; i++)
-	{
-		fscanf(fp,"%d",&s);
-		fscanf(fp,"%d",&d);
-		vertices.insert(s);
-		vertices.insert(d);
-	}
+
 	for(i=0; i<num_edges; i++)
 	{
 		fscanf(fp,"%d",&s);
 		fscanf(fp,"%d",&d);
 		edge_t e;
-		e.src=distance(vertices.begin(),vertices.find(s));
-		e.dest=distance(vertices.begin(),vertices.find(d));
-		edges[(e.dest/num_vertex_interval)].push_back(e);
+		e.src=s;
+		e.dest=d;
+		if(s==0)
+			e.val=0;
+		else
+			e.val=-1;
+		edges[(e.dest/num_of_threads_per_block)].push_back(e);
 	}
 
-	for(i=0; i<num_interval; i++)
+	shard_t * shard;
+
+	CUDA_SAFE_CALL(cudaMallocHost((void **)&shard, num_of_blocks*sizeof(shard_t)));
+	for(i=0; i<num_of_blocks; i++)
 	{
-		sort(edges[i].begin(),edges[i].end());
+		CUDA_SAFE_CALL(cudaMallocHost((void **)&shard[i].edges, edges[i].size()*sizeof(edge_t)));
+		shard[i].numE = edges[i].size();
+		CUDA_SAFE_CALL(cudaMallocHost((void **)&shard[i].vertexEdgeMap, num_vertices*sizeof(int)));
+		for(j=0; j<num_vertices; j++)
+			shard[i].vertexEdgeMap[j] = 0;
+		CUDA_SAFE_CALL(cudaMallocHost((void **)&shard[i].vertices, num_of_threads_per_block*sizeof(int)));
+		for(j=0; j<num_of_threads_per_block; j++)
+			shard[i].vertices[j] = -1;
+	}
+	shard[0].vertices[0] = 0;
+
+
+	for(i=0; i<num_of_blocks; i++)
+	{
+		sort(edges[i].begin(),edges[i].end(),cost);
+		j=0;
 		for (vector<edge_t>::iterator it = edges[i].begin() ; it != edges[i].end(); ++it)
 		{
+			shard[i].edges[j] = (*it);
+			shard[i].vertexEdgeMap[(*it).src] += 1;
+			j++;
 		}
+		for(j=1; j<num_vertices; j++)
+			shard[i].vertexEdgeMap[j] += shard[i].vertexEdgeMap[j-1];
 	}
-	
+/*	
+	for(i = 0; i < num_of_blocks; i++)
+	{
+		for(j = 0; j < shard[i].numE; j++)
+		printf("%d %d\n",shard[i].edges[j].src,shard[i].edges[j].dest);
+	}
+*/
+
 	cudaEvent_t start,end;
 	float diff;
 	double time = 0;
@@ -139,7 +223,7 @@ int main(int argc, char * argv[])
 	CUDA_SAFE_CALL(cudaEventCreate(&end));
 
 	bool stop;
-	int k=0;
+	k=0;
 	do
 	{
 		stop = false;
@@ -148,11 +232,7 @@ int main(int argc, char * argv[])
 
 		CUDA_SAFE_CALL(cudaEventRecord(start,0));
 	
-		for(i = 0; i<P; i++)
-		{
-			graph_t * subgraph = load_subgraph(interval[i]);
-			bfs<<<grid, threads>>> (graph_host, k);
-		}
+		bfs<<<grid, threads>>> (shard, num_vertices);
 
 		CUDA_SAFE_CALL(cudaDeviceSynchronize());
 		CUDA_SAFE_CALL(cudaEventRecord(end,0));
@@ -165,9 +245,14 @@ int main(int argc, char * argv[])
 	}while(stop);
 
 	printf("Number of iterations : %d\n",k);
-	for(int i = 0; i < num_vertices; i++)
+	for(i = 0; i < num_of_blocks; i++)
 	{
-		printf("Vertex %d Distance %d\n",i,vertices_host[i]);
+		for(j = 0; j < num_of_threads_per_block; j++)
+		{
+			k=i*num_of_threads_per_block+j;
+			if(k<num_vertices)
+				printf("Vertex %d Distance %d\n",k,shard[i].vertices[j]);
+		}
 	}
 	printf("Time: %f ms\n",time);
 
@@ -176,7 +261,7 @@ int main(int argc, char * argv[])
 
 	return 0;
 }
-
+/*
 graph_t * load_subgraph(interval_t interval, vector<edge_t> edges)
 {
 	int a = interval.start;
@@ -190,3 +275,4 @@ graph_t * load_subgraph(interval_t interval, vector<edge_t> edges)
 
 	return G;
 }
+*/
