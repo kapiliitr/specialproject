@@ -45,7 +45,6 @@ typedef struct __shard
 	int E;
 	int Vstart;
 	int Vend;
-	int * vertexEdgeMap;
 	edge_t * edges;
 } shard_t;
 /*
@@ -77,7 +76,7 @@ __global__ void gather_bfs(shard_t shard, vertex_t * vertices, int current_depth
 	int id = blockDim.x*blockIdx.x + threadIdx.x;
 	if(id < shard.E)
 	{
-		if(shard.edges[id].val == current_depth)
+		if(shard.edges[id].val == (current_depth+1))
 		{
 			int t=shard.edges[id].dest;
 			if(vertices[t].val == -1)
@@ -97,7 +96,7 @@ __global__ void scatter_bfs(shard_t shard, vertex_t * vertices, int current_dept
 		int t=vertices[shard.edges[id].src].val;
 		if(t >= 0)
 		{
-			shard.edges[id].val = t;
+			shard.edges[id].val = t+1;
 		}
 	}
 }
@@ -137,11 +136,12 @@ int main(int argc, char * argv[])
 
 	
 	//Array of vectors. vector i contains the in edges of vertex i
-	vector< vector<edge_t> > inEdges(num_vertices);
 	vector< vector<edge_t> > outEdges(num_vertices);
 	int * prefixV = (int *) calloc(num_vertices,sizeof(int));
 	int s,d;
 
+	// In Graphchi case, I am storing the source depth in each edge
+	// In X-stream case, I am storing the destination depth in each edge
 	for(i=0; i<num_edges; i++)
 	{
 		fscanf(fp,"%d",&s);
@@ -149,18 +149,17 @@ int main(int argc, char * argv[])
 		edge_t e;
 		e.src=s;
 		e.dest=d;
-		if(s==0)
+		if(d==0)
 			e.val=0;
 		else
 			e.val=-1;
-		inEdges[d].push_back(e);
 		outEdges[s].push_back(e);
 	}
 
 	// Construction of intervals
 	int num_intervals = 0, add = 1;
 	vector<int> startInter;
-	prefixV[0] = inEdges[0].size();
+	prefixV[0] = outEdges[0].size();
 	if(prefixV[0] > MAX_EDGES_PER_SHARD)
 	{
 		startInter.push_back(0);
@@ -169,7 +168,7 @@ int main(int argc, char * argv[])
 	}
 	for(i=1; i<num_vertices; i++)
 	{
-		prefixV[i] = inEdges[i].size();	
+		prefixV[i] = outEdges[i].size();	
 		if(add==1)
 			prefixV[i] += prefixV[i-1];
 		if(prefixV[i] > MAX_EDGES_PER_SHARD)
@@ -212,10 +211,6 @@ int main(int argc, char * argv[])
 
 		if(shard[i].E > MAX_NUM_EDGES_SHARD)
 			MAX_NUM_EDGES_SHARD = shard[i].E;
-
-		CUDA_SAFE_CALL(cudaMallocHost((void **)&shard[i].vertexEdgeMap, num_vertices*sizeof(int)));
-		for(j=0; j<num_vertices; j++)
-			shard[i].vertexEdgeMap[j] = 0;
 	}
 
 
@@ -224,19 +219,16 @@ int main(int argc, char * argv[])
 		vector<edge_t> tempEdges;
 		for(j=interval[i].start; j<=interval[i].end; j++)
 		{
-			for(vector<edge_t>::iterator it=inEdges[j].begin(); it!=inEdges[j].end(); ++it)
+			for(vector<edge_t>::iterator it=outEdges[j].begin(); it!=outEdges[j].end(); ++it)
 				tempEdges.push_back(*it);
 		}
-		sort(tempEdges.begin(),tempEdges.end(),cost);
+//		sort(tempEdges.begin(),tempEdges.end(),cost);
 		j=0;
 		for (vector<edge_t>::iterator it = tempEdges.begin() ; it != tempEdges.end(); ++it)
 		{
 			shard[i].edges[j] = (*it);
-			shard[i].vertexEdgeMap[(*it).src] += 1;
 			j++;
 		}
-		for(j=1; j<num_vertices; j++)
-			shard[i].vertexEdgeMap[j] += shard[i].vertexEdgeMap[j-1];
 	}
 
 
@@ -276,9 +268,9 @@ int main(int argc, char * argv[])
 		CUDA_SAFE_CALL(cudaEventRecord(start,0));
 
 		for(i=0; i<num_intervals; i++)
-			gather_bfs<<<grid, threads>>> (shard[i], vertices, k, num_vertices);
+			scatter_bfs<<<grid, threads>>> (shard[i], vertices, k, num_vertices);
 		for(i=0; i<num_intervals; i++)
-		 	scatter_bfs<<<grid, threads>>> (shard[i], vertices, k, num_vertices);
+		 	gather_bfs<<<grid, threads>>> (shard[i], vertices, k, num_vertices);
 
 		CUDA_SAFE_CALL(cudaDeviceSynchronize());
 		CUDA_SAFE_CALL(cudaEventRecord(end,0));
