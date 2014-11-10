@@ -165,9 +165,8 @@ int main(int argc, char * argv[])
 	// In X-stream case, I am storing the destination depth in each edge
 	for(i=0; i<num_edges; i++)
 	{
-		fscanf(fp,"%d",&d);
 		fscanf(fp,"%d",&s);
-		fscanf(fp,"%d",&v);
+		fscanf(fp,"%d",&d);
 		edge_t e;
 		e.src=s;
 		e.dest=d;
