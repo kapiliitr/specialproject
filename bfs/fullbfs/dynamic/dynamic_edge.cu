@@ -370,11 +370,11 @@ int main(int argc, char * argv[])
 	}while(stop);
 
 	printf("Number of iterations : %d\n",k);
-	CUDA_SAFE_CALL(cudaMemcpy(vertices_host, vertices, num_vertices*sizeof(vertex_t), cudaMemcpyDeviceToHost));
+/*	CUDA_SAFE_CALL(cudaMemcpy(vertices_host, vertices, num_vertices*sizeof(vertex_t), cudaMemcpyDeviceToHost));
 	for(int i = 0; i < num_vertices; i++)
 	{
 		printf("Vertex %d Distance %d\n",i,vertices_host[i].val);
-	}
+	}*/
 	printf("Time: %f ms\n",time);
 
 	free(interval);

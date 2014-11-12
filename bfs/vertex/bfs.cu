@@ -219,10 +219,10 @@ int main(int argc, char * argv[])
 	}while(stop);
 
 	printf("Number of iterations : %d\n",k);
-	for(int i = 0; i < num_vertices; i++)
+	/*for(int i = 0; i < num_vertices; i++)
 	{
 		printf("Vertex %d Distance %d\n",i,vertices_host[i]);
-	}
+	}*/
 	printf("Time: %f ms\n",time);
 
 	CUDA_SAFE_CALL(cudaFree(vertices_host));
