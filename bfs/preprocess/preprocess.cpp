@@ -40,12 +40,13 @@ int main(int argc, char * argv[])
 	int num_vertices, num_edges, i, j;
 	fscanf(fp,"%d %d",&num_vertices,&num_edges);
 	set<int> vertices;
-	int s,d,max=INT_MIN,u;
+	int s,d,max=INT_MIN;
+	int u;
 	for(i=0; i<num_edges; i++)
 	{
 		fscanf(fp,"%d",&d);
 		fscanf(fp,"%d",&s);
-		fscanf(fp,"%d",&u);
+	//	fscanf(fp,"%d",&u);
 
 		vertices.insert(s);
 		vertices.insert(d);
@@ -71,9 +72,9 @@ int main(int argc, char * argv[])
 	{
 		fscanf(fp,"%d",&d);
 		fscanf(fp,"%d",&s);
-		fscanf(fp,"%d",&u);
-		fprintf(fpo,"%d ",vertexIndex[d]);
-		fprintf(fpo,"%d\n",vertexIndex[s]);
+	//	fscanf(fp,"%d",&u);
+		fprintf(fpo,"%d ",vertexIndex[s]);
+		fprintf(fpo,"%d\n",vertexIndex[d]);
 	}
 
 	return 0;

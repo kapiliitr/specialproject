@@ -336,13 +336,17 @@ int main(int argc, char * argv[])
 			CUDA_SAFE_CALL(cudaMemcpy(&(shard->to), &to_dev, sizeof(vertex_t *),cudaMemcpyHostToDevice));
 
 
-			gettimeofday(&t1,NULL);
-
+			//gettimeofday(&t1,NULL);
+			CUDA_SAFE_CALL(cudaEventRecord(start));	
 			scatter_bfs_edge<<<grid, threads>>> (shard, vertices, k, num_vertices);
 
 			CUDA_SAFE_CALL(cudaDeviceSynchronize());
-			gettimeofday(&t2,NULL);
-			time += ((t2.tv_sec*1.0e3+t2.tv_usec*1.0e-3)-(t1.tv_sec*1.0e3+t1.tv_usec*1.0e-3));
+			CUDA_SAFE_CALL(cudaEventRecord(end));
+			CUDA_SAFE_CALL(cudaEventSynchronize(end));
+			CUDA_SAFE_CALL(cudaEventElapsedTime(&diff,start,end));
+			time += diff;
+			//gettimeofday(&t2,NULL);
+			//time += ((t2.tv_sec*1.0e3+t2.tv_usec*1.0e-3)-(t1.tv_sec*1.0e3+t1.tv_usec*1.0e-3));
 		}
 		/*for(i=0; i<num_intervals; i++)
 		{
@@ -374,7 +378,8 @@ int main(int argc, char * argv[])
 	for(int i = 0; i < num_vertices; i++)
 	{
 		printf("Vertex %d Distance %d\n",i,vertices_host[i].val);
-	}*/
+	}
+	*/
 	printf("Time: %f ms\n",time);
 
 	free(interval);
