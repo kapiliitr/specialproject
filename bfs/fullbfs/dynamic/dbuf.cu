@@ -46,17 +46,11 @@ typedef struct __shard
     int E;
     int Vstart;
     int Vend;
+    int * vmap;
     vertex_t * from;
     vertex_t * to;
 } shard_t;
-/*
-   typedef struct __graph
-   {
-   vertex_t * vertices;
-   } graph_t;
 
-   graph_t * load_subgraph(interval_t, vector<edge_t>);
- */
 __device__ bool d_over;
 
 __global__ void reset()
@@ -90,40 +84,53 @@ __global__ void init(vertex_t * vertices, int starting_vertex, int num_vertices)
   }
   }*/
 
-__global__ void scatter_bfs_edge(const shard_t * shard, vertex_t * vertices, int current_depth, int V)
+__global__ void scatter_bfs_edge(const shard_t * shard, vertex_t * vertices, int current_depth)
 {
     int id = blockDim.x*blockIdx.x + threadIdx.x;
     if(id < shard->E)
     {
         int s=shard->from[id].val;
-        if(s < V)
+        int t=vertices[s].val;
+        if(t==current_depth)
         {
-            int t=vertices[s].val;
-            if(t==current_depth)
+            int u=shard->to[id].val;
+            if(vertices[u].val == -1)
             {
-                //shard->edges[id].val = t+1;
-                int u=shard->to[id].val;
-	                if(u < V)
-                {
-                    if(vertices[u].val == -1)
-                    {
-                        vertices[u].val = t+1;
-                        d_over = true;
-                    }
-                }
-                else
-                    printf("Illegal vertex dest: %d\n",u);
+                vertices[u].val = t+1;
+                d_over = true;
             }
         }
-        else
-            printf("Illegal vertex src: %d\n",s);
     }
 }
 
+__global__ void scatter_bfs_vertex(const shard_t * shard, vertex_t * vertices, int current_depth)
+{
+    int id = blockDim.x*blockIdx.x + threadIdx.x;
+    int vid = id + shard->Vstart;
+    if(vid <= shard->Vend)
+    {
+        if(vertices[vid].val == current_depth)
+        {
+            int i;
+            if(id == 0) 
+                i = 0;
+            else
+                i = shard->vmap[id-1];
+            for(; i < shard->vmap[id]; i++)
+            {
+                if(vertices[shard->to[i].val].val == -1)
+                {
+                    vertices[shard->to[i].val].val = current_depth+1;
+                    d_over = true;
+                }
+            }
+        }
+    }
+}
 
 bool cost(const edge_t &a, const edge_t &b)
 {
-    return (a.src < b.src);
+    return ((a.src < b.src) || (a.src == b.src && a.dest < b.dest));
 }
 
 int main(int argc, char * argv[])
@@ -223,30 +230,35 @@ int main(int argc, char * argv[])
 
 
     printf("\nBegin shard construction...\n");
-    //Construction of shards
+    //Construction of shard
     gettimeofday(&t1,NULL);
-    shard_t * shard_host = (shard_t *) malloc(num_intervals*sizeof(shard_t));
+    shard_t * shard = (shard_t *) malloc(num_intervals*sizeof(shard_t));
 
     //Finding the max number of edges in a shard
     // We will allocate space for that many edges to each shard to maintain consistency
     int MAX_NUM_EDGES_SHARD = INT_MIN;
+    int MAX_NUM_VERTICES_SHARD = INT_MIN;
+
     for(i=0; i<num_intervals; i++)
     {
         int t = prefixV[interval[i].end];
         if(t > MAX_NUM_EDGES_SHARD)
             MAX_NUM_EDGES_SHARD = t;
+        int q = interval[i].end-interval[i].start+1;
+        if(q > MAX_NUM_VERTICES_SHARD)
+            MAX_NUM_VERTICES_SHARD = q;
     }
 
     for(i=0; i<num_intervals; i++)
     {
         // first and last vertices in shard
-        shard_host[i].Vstart = interval[i].start;
-        shard_host[i].Vend = interval[i].end;
+        shard[i].Vstart = interval[i].start;
+        shard[i].Vend = interval[i].end;
+        shard[i].E = prefixV[interval[i].end]; 
 
-        // number of edges in shard
-        shard_host[i].E = prefixV[interval[i].end];
-        shard_host[i].from = (vertex_t *) malloc(MAX_NUM_EDGES_SHARD*sizeof(edge_t));
-        shard_host[i].to = (vertex_t *) malloc(MAX_NUM_EDGES_SHARD*sizeof(edge_t));
+        shard[i].vmap = (int *) malloc(MAX_NUM_VERTICES_SHARD*sizeof(int));
+        shard[i].from = (vertex_t *) malloc(MAX_NUM_EDGES_SHARD*sizeof(vertex_t));
+        shard[i].to = (vertex_t *) malloc(MAX_NUM_EDGES_SHARD*sizeof(vertex_t));
     }
 
 
@@ -261,28 +273,33 @@ int main(int argc, char * argv[])
 
         //Sorting based on src vertex to align the edges such that the access of vertices[src] is sequential
         sort(tempEdges.begin(),tempEdges.end(),cost);
-        j=0;
+
+        vector< vector<edge_t> > bucket(MAX_NUM_VERTICES_SHARD);
         for (vector<edge_t>::iterator it = tempEdges.begin() ; it != tempEdges.end(); ++it)
         {
-            shard_host[i].from[j].val = (*it).src;
-            shard_host[i].to[j].val = (*it).dest;
-            j++;
+            bucket[(*it).src-interval[i].start].push_back(*it);
+        }
+        for(j=0;j<MAX_NUM_VERTICES_SHARD;j++)
+        {
+            shard[i].vmap[j] = bucket[j].size();
+        }
+        for(j=1;j<MAX_NUM_VERTICES_SHARD;j++)
+        {
+            shard[i].vmap[j] += shard[i].vmap[j-1];
+        }
+        k=0;
+        for(j=0;j<MAX_NUM_VERTICES_SHARD;j++)
+        {
+            for (vector<edge_t>::iterator it = bucket[j].begin() ; it != bucket[j].end(); ++it)
+            {
+                shard[i].from[k].val = (*it).src;
+                shard[i].to[k].val = (*it).dest;
+                k++;
+            }
         }
     }
     gettimeofday(&t2,NULL);
     printf("Time to construct shards : %f sec\n",((t2.tv_sec+t2.tv_usec*1.0e-6)-(t1.tv_sec+t1.tv_usec*1.0e-6)));
-
-    int num_of_blocks = 1;
-    int num_of_threads_per_block = MAX_NUM_EDGES_SHARD;
-
-    if(MAX_NUM_EDGES_SHARD>MAX_THREADS_PER_BLOCK)
-    {
-        num_of_blocks = (int)ceil(MAX_NUM_EDGES_SHARD/(double)MAX_THREADS_PER_BLOCK); 
-        num_of_threads_per_block = MAX_THREADS_PER_BLOCK; 
-    }
-
-    dim3  grid( num_of_blocks, 1, 1);
-    dim3  threads( num_of_threads_per_block, 1, 1);
 
     cudaStream_t * str;
     cudaEvent_t * start;
@@ -298,21 +315,6 @@ int main(int argc, char * argv[])
         CUDA_SAFE_CALL(cudaEventCreate(&(stop[i])));
     }
 
-    shard_t *shard;
-    vertex_t * from_dev;
-    vertex_t * to_dev;
-    CUDA_SAFE_CALL(cudaMalloc((void **)&shard, sizeof(shard_t)));
-    CUDA_SAFE_CALL(cudaMalloc((void **)&from_dev, MAX_NUM_EDGES_SHARD*sizeof(edge_t)));
-    CUDA_SAFE_CALL(cudaMalloc((void **)&to_dev, MAX_NUM_EDGES_SHARD*sizeof(edge_t)));
-
-    //Extra Buffer for doing double bufferring
-    shard_t *shard2;
-    vertex_t * from_dev2;
-    vertex_t * to_dev2;
-    CUDA_SAFE_CALL(cudaMalloc((void **)&shard2, sizeof(shard_t)));
-    CUDA_SAFE_CALL(cudaMalloc((void **)&from_dev2, MAX_NUM_EDGES_SHARD*sizeof(edge_t)));
-    CUDA_SAFE_CALL(cudaMalloc((void **)&to_dev2, MAX_NUM_EDGES_SHARD*sizeof(edge_t)));
-
     // It will contain the visited status of each vertex
     vertex_t *vertices;
     //CUDA_SAFE_CALL(cudaMallocHost((void **)&vertices, num_vertices*sizeof(vertex_t)));
@@ -322,7 +324,41 @@ int main(int argc, char * argv[])
     init<<<((num_vertices+MAX_THREADS_PER_BLOCK-1)/MAX_THREADS_PER_BLOCK),MAX_THREADS_PER_BLOCK>>> (vertices, 0, num_vertices);
 
     float * diff = (float *) malloc(num_intervals*sizeof(float));
-    double time = 0; 
+    double time = 0;
+
+    // For vertex centric algo
+    shard_t * shard_dev;
+    int * vmap_dev;
+    vertex_t * from_dev;
+    vertex_t * to_dev;
+    CUDA_SAFE_CALL(cudaMalloc((void **)&shard_dev, sizeof(shard_t)));
+    CUDA_SAFE_CALL(cudaMalloc((void **)&vmap_dev, MAX_NUM_VERTICES_SHARD*sizeof(int)));
+    CUDA_SAFE_CALL(cudaMalloc((void **)&from_dev, MAX_NUM_EDGES_SHARD*sizeof(vertex_t)));
+    CUDA_SAFE_CALL(cudaMalloc((void **)&to_dev, MAX_NUM_EDGES_SHARD*sizeof(vertex_t)));
+
+    //Extra Buffer for doing double bufferring
+    shard_t * shard_dev2;
+    int * vmap_dev2;
+    vertex_t * from_dev2;
+    vertex_t * to_dev2;
+    CUDA_SAFE_CALL(cudaMalloc((void **)&shard_dev2, sizeof(shard_t)));
+    CUDA_SAFE_CALL(cudaMalloc((void **)&vmap_dev2, MAX_NUM_VERTICES_SHARD*sizeof(int)));
+    CUDA_SAFE_CALL(cudaMalloc((void **)&from_dev2, MAX_NUM_EDGES_SHARD*sizeof(vertex_t)));
+    CUDA_SAFE_CALL(cudaMalloc((void **)&to_dev2, MAX_NUM_EDGES_SHARD*sizeof(vertex_t)));
+
+    int num_of_blocks = 1;
+    //int MAX_THREADS = MAX_NUM_VERTICES_SHARD;
+    int MAX_THREADS = MAX_NUM_EDGES_SHARD;
+    int num_of_threads_per_block = MAX_THREADS;
+
+    if(MAX_THREADS>MAX_THREADS_PER_BLOCK)
+    {
+        num_of_blocks = (int)ceil(MAX_THREADS/(double)MAX_THREADS_PER_BLOCK); 
+        num_of_threads_per_block = MAX_THREADS_PER_BLOCK; 
+    }
+
+    dim3  grid( num_of_blocks, 1, 1);
+    dim3  threads( num_of_threads_per_block, 1, 1);
 
     printf("Begin kernel\n");
 
@@ -336,26 +372,31 @@ int main(int argc, char * argv[])
         CUDA_SAFE_CALL(cudaDeviceSynchronize());
 
         pingpong=0;
+
         for(i=0; i<num_intervals; i++)
         {
             if(pingpong==0)
             {
                 //Copy Ping
-                CUDA_SAFE_CALL(cudaMemcpyAsync(shard, &shard_host[i], sizeof(shard_t),cudaMemcpyHostToDevice,str[0]));
-                CUDA_SAFE_CALL(cudaMemcpyAsync(from_dev, shard_host[i].from, shard_host[i].E*sizeof(vertex_t),cudaMemcpyHostToDevice,str[0]));
-                CUDA_SAFE_CALL(cudaMemcpyAsync(to_dev, shard_host[i].to, shard_host[i].E*sizeof(vertex_t),cudaMemcpyHostToDevice,str[0]));
-                CUDA_SAFE_CALL(cudaMemcpyAsync(&(shard->from), &from_dev, sizeof(vertex_t *),cudaMemcpyHostToDevice,str[0]));
-                CUDA_SAFE_CALL(cudaMemcpyAsync(&(shard->to), &to_dev, sizeof(vertex_t *),cudaMemcpyHostToDevice,str[0]));
+                CUDA_SAFE_CALL(cudaMemcpyAsync(shard_dev, &shard[i], sizeof(shard_t),cudaMemcpyHostToDevice,str[0]));
+                CUDA_SAFE_CALL(cudaMemcpyAsync(vmap_dev, shard[i].vmap, MAX_NUM_VERTICES_SHARD*sizeof(int),cudaMemcpyHostToDevice,str[0]));
+                CUDA_SAFE_CALL(cudaMemcpyAsync(from_dev, shard[i].from, MAX_NUM_EDGES_SHARD*sizeof(vertex_t),cudaMemcpyHostToDevice,str[0]));
+                CUDA_SAFE_CALL(cudaMemcpyAsync(to_dev, shard[i].to, MAX_NUM_EDGES_SHARD*sizeof(vertex_t),cudaMemcpyHostToDevice,str[0]));
+                CUDA_SAFE_CALL(cudaMemcpyAsync(&(shard_dev->vmap), &vmap_dev, sizeof(int *),cudaMemcpyHostToDevice,str[0]));
+                CUDA_SAFE_CALL(cudaMemcpyAsync(&(shard_dev->from), &from_dev, sizeof(vertex_t *),cudaMemcpyHostToDevice,str[0]));
+                CUDA_SAFE_CALL(cudaMemcpyAsync(&(shard_dev->to), &to_dev, sizeof(vertex_t *),cudaMemcpyHostToDevice,str[0]));
+
 
                 if(i>0)
                 {
                     //Process Pong
                     CUDA_SAFE_CALL(cudaEventRecord(start[1],str[1]));
-                    scatter_bfs_edge<<<grid, threads,0,str[1]>>> (shard2, vertices, k, num_vertices);
+                    scatter_bfs_edge<<<grid, threads,0,str[1]>>> (shard_dev2, vertices, k);
                     CUDA_SAFE_CALL(cudaStreamSynchronize(str[1]));
                     CUDA_SAFE_CALL(cudaEventRecord(stop[1],str[1]));
                     CUDA_SAFE_CALL(cudaEventSynchronize(stop[1]));
                     CUDA_SAFE_CALL(cudaEventElapsedTime(&diff[i-1],start[1],stop[1]));
+
                 }
 
                 pingpong=1;
@@ -363,15 +404,17 @@ int main(int argc, char * argv[])
             else
             {
                 //Copy Pong
-                CUDA_SAFE_CALL(cudaMemcpyAsync(shard2, &shard_host[i], sizeof(shard_t),cudaMemcpyHostToDevice,str[1]));
-                CUDA_SAFE_CALL(cudaMemcpyAsync(from_dev2, shard_host[i].from, shard_host[i].E*sizeof(vertex_t),cudaMemcpyHostToDevice,str[1]));
-                CUDA_SAFE_CALL(cudaMemcpyAsync(to_dev2, shard_host[i].to, shard_host[i].E*sizeof(vertex_t),cudaMemcpyHostToDevice,str[1]));
-                CUDA_SAFE_CALL(cudaMemcpyAsync(&(shard2->from), &from_dev2, sizeof(vertex_t *),cudaMemcpyHostToDevice,str[1]));
-                CUDA_SAFE_CALL(cudaMemcpyAsync(&(shard2->to), &to_dev2, sizeof(vertex_t *),cudaMemcpyHostToDevice,str[1]));
+                CUDA_SAFE_CALL(cudaMemcpyAsync(shard_dev2, &shard[i], sizeof(shard_t),cudaMemcpyHostToDevice,str[1]));
+                CUDA_SAFE_CALL(cudaMemcpyAsync(vmap_dev2, shard[i].vmap, MAX_NUM_VERTICES_SHARD*sizeof(int),cudaMemcpyHostToDevice,str[1]));
+                CUDA_SAFE_CALL(cudaMemcpyAsync(from_dev2, shard[i].from, MAX_NUM_EDGES_SHARD*sizeof(vertex_t),cudaMemcpyHostToDevice,str[1]));
+                CUDA_SAFE_CALL(cudaMemcpyAsync(to_dev2, shard[i].to, MAX_NUM_EDGES_SHARD*sizeof(vertex_t),cudaMemcpyHostToDevice,str[1]));
+                CUDA_SAFE_CALL(cudaMemcpyAsync(&(shard_dev2->vmap), &vmap_dev2, sizeof(int *),cudaMemcpyHostToDevice,str[1]));
+                CUDA_SAFE_CALL(cudaMemcpyAsync(&(shard_dev2->from), &from_dev2, sizeof(vertex_t *),cudaMemcpyHostToDevice,str[1]));
+                CUDA_SAFE_CALL(cudaMemcpyAsync(&(shard_dev2->to), &to_dev2, sizeof(vertex_t *),cudaMemcpyHostToDevice,str[1]));
 
-                //Process Ping
+                //Process Pong
                 CUDA_SAFE_CALL(cudaEventRecord(start[0],str[0]));
-                scatter_bfs_edge<<<grid, threads,0,str[0]>>> (shard, vertices, k, num_vertices);
+                scatter_bfs_edge<<<grid, threads,0,str[0]>>> (shard_dev, vertices, k);
                 CUDA_SAFE_CALL(cudaStreamSynchronize(str[0]));
                 CUDA_SAFE_CALL(cudaEventRecord(stop[0],str[0]));
                 CUDA_SAFE_CALL(cudaEventSynchronize(stop[0]));
@@ -384,7 +427,7 @@ int main(int argc, char * argv[])
         {
             //Process Pong
             CUDA_SAFE_CALL(cudaEventRecord(start[1],str[1]));
-            scatter_bfs_edge<<<grid, threads,0,str[1]>>> (shard2, vertices, k, num_vertices);
+            scatter_bfs_edge<<<grid, threads,0,str[1]>>> (shard_dev2, vertices, k);
             CUDA_SAFE_CALL(cudaStreamSynchronize(str[1]));
             CUDA_SAFE_CALL(cudaEventRecord(stop[1],str[1]));
             CUDA_SAFE_CALL(cudaEventSynchronize(stop[1]));
@@ -392,28 +435,29 @@ int main(int argc, char * argv[])
         }
         else
         {
-            //Process Ping
+            //Process Pong
             CUDA_SAFE_CALL(cudaEventRecord(start[0],str[0]));
-            scatter_bfs_edge<<<grid, threads,0,str[0]>>> (shard, vertices, k, num_vertices);
+            scatter_bfs_edge<<<grid, threads,0,str[0]>>> (shard_dev, vertices, k);
             CUDA_SAFE_CALL(cudaStreamSynchronize(str[0]));
             CUDA_SAFE_CALL(cudaEventRecord(stop[0],str[0]));
             CUDA_SAFE_CALL(cudaEventSynchronize(stop[0]));
-            CUDA_SAFE_CALL(cudaEventElapsedTime(&diff[i-1],start[0],stop[0]));
+            CUDA_SAFE_CALL(cudaEventElapsedTime(&diff[i-1],start[1],stop[1]));
         }
 
-	for(i=0;i<num_intervals;i++)
-		time += diff[i];
+        for(i=0;i<num_intervals;i++)
+            time += diff[i];
 
         CUDA_SAFE_CALL(cudaMemcpyFromSymbol(&over, d_over, sizeof(bool),0, cudaMemcpyDeviceToHost));
         k++;
     }while(over);
 
     printf("Number of iterations : %d\n",k);
-/*    CUDA_SAFE_CALL(cudaMemcpy(vertices_host, vertices, num_vertices*sizeof(vertex_t), cudaMemcpyDeviceToHost));
-    for(int i = 0; i < num_vertices; i++)
-    {
-	    printf("Vertex %d Distance %d\n",i,vertices_host[i].val);
-    }*/
+/*      CUDA_SAFE_CALL(cudaMemcpy(vertices_host, vertices, num_vertices*sizeof(vertex_t), cudaMemcpyDeviceToHost));
+        for(int i = 0; i < num_vertices; i++)
+        {
+        printf("Vertex %d Distance %d\n",i,vertices_host[i].val);
+        }
+    */
     printf("Time: %f ms\n",time);
 
     for(int i = 0; i < num_evts; i++)
@@ -423,19 +467,24 @@ int main(int argc, char * argv[])
         CUDA_SAFE_CALL(cudaEventDestroy(stop[i]));
     }
 
-    CUDA_SAFE_CALL(cudaFree(vertices));
-    CUDA_SAFE_CALL(cudaFree(from_dev));
-    CUDA_SAFE_CALL(cudaFree(to_dev));
-    CUDA_SAFE_CALL(cudaFree(shard));
-
     free(interval);
     for(i=0; i<num_intervals; i++)
     {
-        free(shard_host[i].from);
-        free(shard_host[i].to);
+        free(shard[i].vmap);
+        free(shard[i].from);
+        free(shard[i].to);
     }
-    free(shard_host);
+    free(shard);
     free(vertices_host);
-    
+    CUDA_SAFE_CALL(cudaFree(vertices));
+    CUDA_SAFE_CALL(cudaFree(vmap_dev));
+    CUDA_SAFE_CALL(cudaFree(from_dev));
+    CUDA_SAFE_CALL(cudaFree(to_dev));
+    CUDA_SAFE_CALL(cudaFree(shard_dev));
+    CUDA_SAFE_CALL(cudaFree(vmap_dev2));
+    CUDA_SAFE_CALL(cudaFree(from_dev2));
+    CUDA_SAFE_CALL(cudaFree(to_dev2));
+    CUDA_SAFE_CALL(cudaFree(shard_dev2));
+
     return 0;
 }
