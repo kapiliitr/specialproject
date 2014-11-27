@@ -70,7 +70,15 @@ __device__ int binarySearch(int * arr, int l, int r, int x)
     while (l <= r)
     {
         int m = l+((r-l)/2);
-        if (arr[m] == x) return m+1;
+        if (arr[m] == x)
+        {
+            int t = m;
+            while(t<r && arr[t+1] == arr[t])
+            {
+                t++;
+            }
+            return t+1;
+        }
         if (arr[m] < x) l = m + 1;
         else r = m - 1;
     }
@@ -159,7 +167,6 @@ int main(int argc, char * argv[])
 
     // It will contain the visited status of each vertex
     vertex_t *vertices;
-    //CUDA_SAFE_CALL(cudaMallocHost((void **)&vertices, num_vertices*sizeof(vertex_t)));
     vertex_t *vertices_host = (vertex_t *) malloc(num_vertices*sizeof(vertex_t));
     CUDA_SAFE_CALL(cudaMalloc((void **)&vertices, num_vertices*sizeof(vertex_t)));
 
@@ -411,8 +418,8 @@ int main(int argc, char * argv[])
                 CUDA_SAFE_CALL(cudaMemcpyAsync(shard_dev2, &shard[i], sizeof(shard_t),cudaMemcpyHostToDevice,str[1]));
                 CUDA_SAFE_CALL(cudaMemcpyAsync(from_dev2, shard[i].from, MAX_NUM_EDGES_SHARD*sizeof(int),cudaMemcpyHostToDevice,str[1]));
                 CUDA_SAFE_CALL(cudaMemcpyAsync(&(shard_dev2->from), &from_dev2, sizeof(int *),cudaMemcpyHostToDevice,str[1]));
-  //              CUDA_SAFE_CALL(cudaMemcpyAsync(to_dev2, shard[i].to, MAX_NUM_EDGES_SHARD*sizeof(int),cudaMemcpyHostToDevice,str[1]));
-  //              CUDA_SAFE_CALL(cudaMemcpyAsync(&(shard_dev2->to), &to_dev2, sizeof(int *),cudaMemcpyHostToDevice,str[1]));
+//                CUDA_SAFE_CALL(cudaMemcpyAsync(to_dev2, shard[i].to, MAX_NUM_EDGES_SHARD*sizeof(int),cudaMemcpyHostToDevice,str[1]));
+//                CUDA_SAFE_CALL(cudaMemcpyAsync(&(shard_dev2->to), &to_dev2, sizeof(int *),cudaMemcpyHostToDevice,str[1]));
                 CUDA_SAFE_CALL(cudaMemcpyAsync(vmap_dev2, shard[i].vmap, MAX_NUM_VERTICES_SHARD*sizeof(int),cudaMemcpyHostToDevice,str[1]));
                 CUDA_SAFE_CALL(cudaMemcpyAsync(&(shard_dev2->vmap), &vmap_dev2, sizeof(int *),cudaMemcpyHostToDevice,str[1]));
                 CUDA_SAFE_CALL(cudaMemcpyAsync(&(shard_dev2->updates), &updates_dev2, sizeof(double *),cudaMemcpyHostToDevice,str[0]));
@@ -470,8 +477,8 @@ int main(int argc, char * argv[])
                 CUDA_SAFE_CALL(cudaMemcpyAsync(shard_dev, &shard[i], sizeof(shard_t),cudaMemcpyHostToDevice,str[0]));
                 CUDA_SAFE_CALL(cudaMemcpyAsync(from_dev, shard[i].from, MAX_NUM_EDGES_SHARD*sizeof(int),cudaMemcpyHostToDevice,str[0]));
                 CUDA_SAFE_CALL(cudaMemcpyAsync(&(shard_dev->from), &from_dev, sizeof(int *),cudaMemcpyHostToDevice,str[0]));
-    //            CUDA_SAFE_CALL(cudaMemcpyAsync(to_dev, shard[i].to, MAX_NUM_EDGES_SHARD*sizeof(int),cudaMemcpyHostToDevice,str[0]));
-    //            CUDA_SAFE_CALL(cudaMemcpyAsync(&(shard_dev->to), &to_dev, sizeof(int *),cudaMemcpyHostToDevice,str[0]));
+//                CUDA_SAFE_CALL(cudaMemcpyAsync(to_dev, shard[i].to, MAX_NUM_EDGES_SHARD*sizeof(int),cudaMemcpyHostToDevice,str[0]));
+//                CUDA_SAFE_CALL(cudaMemcpyAsync(&(shard_dev->to), &to_dev, sizeof(int *),cudaMemcpyHostToDevice,str[0]));
                 CUDA_SAFE_CALL(cudaMemcpyAsync(vmap_dev, shard[i].vmap, MAX_NUM_VERTICES_SHARD*sizeof(int),cudaMemcpyHostToDevice,str[0]));
                 CUDA_SAFE_CALL(cudaMemcpyAsync(&(shard_dev->vmap), &vmap_dev, sizeof(int *),cudaMemcpyHostToDevice,str[0]));
                 CUDA_SAFE_CALL(cudaMemcpyAsync(&(shard_dev->updates), &updates_dev, sizeof(double *),cudaMemcpyHostToDevice,str[0]));
@@ -497,8 +504,8 @@ int main(int argc, char * argv[])
                 CUDA_SAFE_CALL(cudaMemcpyAsync(shard_dev2, &shard[i], sizeof(shard_t),cudaMemcpyHostToDevice,str[1]));
                 CUDA_SAFE_CALL(cudaMemcpyAsync(from_dev2, shard[i].from, MAX_NUM_EDGES_SHARD*sizeof(int),cudaMemcpyHostToDevice,str[1]));
                 CUDA_SAFE_CALL(cudaMemcpyAsync(&(shard_dev2->from), &from_dev2, sizeof(int *),cudaMemcpyHostToDevice,str[1]));
-      //          CUDA_SAFE_CALL(cudaMemcpyAsync(to_dev2, shard[i].to, MAX_NUM_EDGES_SHARD*sizeof(int),cudaMemcpyHostToDevice,str[1]));
-      //          CUDA_SAFE_CALL(cudaMemcpyAsync(&(shard_dev2->to), &to_dev2, sizeof(int *),cudaMemcpyHostToDevice,str[1]));
+//                CUDA_SAFE_CALL(cudaMemcpyAsync(to_dev2, shard[i].to, MAX_NUM_EDGES_SHARD*sizeof(int),cudaMemcpyHostToDevice,str[1]));
+//                CUDA_SAFE_CALL(cudaMemcpyAsync(&(shard_dev2->to), &to_dev2, sizeof(int *),cudaMemcpyHostToDevice,str[1]));
                 CUDA_SAFE_CALL(cudaMemcpyAsync(vmap_dev2, shard[i].vmap, MAX_NUM_VERTICES_SHARD*sizeof(int),cudaMemcpyHostToDevice,str[1]));
                 CUDA_SAFE_CALL(cudaMemcpyAsync(&(shard_dev2->vmap), &vmap_dev2, sizeof(int *),cudaMemcpyHostToDevice,str[1]));
                 CUDA_SAFE_CALL(cudaMemcpyAsync(&(shard_dev2->updates), &updates_dev2, sizeof(double *),cudaMemcpyHostToDevice,str[0]));
@@ -552,12 +559,12 @@ int main(int argc, char * argv[])
     printf("Time to Pagerank : %f sec\n",((t2.tv_sec+t2.tv_usec*1.0e-6)-(t1.tv_sec+t1.tv_usec*1.0e-6)));
 
     printf("Number of iterations : %d\n",k);
-/*      CUDA_SAFE_CALL(cudaMemcpy(vertices_host, vertices, num_vertices*sizeof(vertex_t), cudaMemcpyDeviceToHost));
-        for(int i = 0; i < num_vertices; i++)
-        {
-        printf("Vertex %d Distance %d\n",i,vertices_host[i].val);
-        }
-    */
+/*    CUDA_SAFE_CALL(cudaMemcpy(vertices_host, vertices, num_vertices*sizeof(vertex_t), cudaMemcpyDeviceToHost));
+    for(int i = 0; i < num_vertices; i++)
+    {
+        printf("Vertex %d Distance %d\n",i,(int)vertices_host[i].val);
+    }*/
+
     printf("Time: %f ms\n",time);
 
     for(int i = 0; i < num_evts; i++)
@@ -572,7 +579,7 @@ int main(int argc, char * argv[])
     {
         free(shard[i].vmap);
         free(shard[i].from);
-        //free(shard[i].to);
+//        free(shard[i].to);
         free(shard[i].updates);
     }
     free(shard);
@@ -580,12 +587,12 @@ int main(int argc, char * argv[])
     CUDA_SAFE_CALL(cudaFree(vertices));
     CUDA_SAFE_CALL(cudaFree(vmap_dev));
     CUDA_SAFE_CALL(cudaFree(from_dev));
-    //CUDA_SAFE_CALL(cudaFree(to_dev));
+//    CUDA_SAFE_CALL(cudaFree(to_dev));
     CUDA_SAFE_CALL(cudaFree(updates_dev));
     CUDA_SAFE_CALL(cudaFree(shard_dev));
     CUDA_SAFE_CALL(cudaFree(vmap_dev2));
     CUDA_SAFE_CALL(cudaFree(from_dev2));
-    //CUDA_SAFE_CALL(cudaFree(to_dev2));
+//    CUDA_SAFE_CALL(cudaFree(to_dev2));
     CUDA_SAFE_CALL(cudaFree(updates_dev2));
     CUDA_SAFE_CALL(cudaFree(shard_dev2));
 
