@@ -1,3 +1,6 @@
 *
-!*.cu
+!bfs
+!pr
+!sssp
+!cc
 !.gitignore
