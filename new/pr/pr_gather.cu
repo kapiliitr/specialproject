@@ -86,31 +86,15 @@ __device__ double atomicAdd(VertexVal* address, VertexVal val)
 __global__ void gather(const shard_t * shard, vertex_t * vertices, bool * frontier_cur, bool * frontier_next, int num_vertices, int current_depth)
 {
     int id = blockDim.x*blockIdx.x + threadIdx.x;
-    if(id < shard->Vend-shard->Vstart+1)
-    {
-        shard->inUpdates[id] = 0;
-        shard->changed[id] = false;
-    }
-    __syncthreads();
-    
     VertexId s,d;
     if(id < shard->Ein)
     {
         s = shard->inEdges[id].src;
-        d = shard->inEdges[id].dest - shard->Vstart;
         VertexVal u = vertices[s].val/vertices[s].numOutEdges;
-        atomicAdd(&shard->inUpdates[d],u);
+        shard->inUpdates[id] = u;
     }
-    __syncthreads();
 }
-
-/*
-__global__ void find_frontier(const shard_t * shard, vertex_t * vertices, bool * frontier_cur, bool * frontier_next, int num_vertices, int current_depth)
-{
-}
-*/
 #endif
-
 
 #ifndef __APPLY__
 #define __APPLY__
@@ -119,29 +103,41 @@ __global__ void apply(const shard_t * shard, vertex_t * vertices, bool * frontie
     int id = blockDim.x*blockIdx.x + threadIdx.x;
     int vid = id + shard->Vstart;
     if(vid <= shard->Vend)
-    {
-        VertexVal newval = 0.15 + 0.85 * shard->inUpdates[id];
-        if(fabs(vertices[vid].val - newval) >= ERR)
-        {
+    {   
+       int i;
+       shard->changed[id] = false;
+       VertexVal sum, newval;
+       if(id == 0)
+           i=0;
+       else
+           i=shard->inEdgesMap[id-1];
+       for(; i < shard->inEdgesMap[id]; i++)
+       {
+            sum += shard->inUpdates[i];
+       }
+       newval = 0.15 + 0.85 * sum;
+       if(fabs(vertices[vid].val - newval) >= ERR)
+       {
            shard->changed[id] = true;
-        }
-        vertices[vid].val = newval;
+       }
+       vertices[vid].val = newval;
     }
-    __syncthreads();
+}
 
+__global__ void find_frontier(const shard_t * shard, vertex_t * vertices, bool * frontier_cur, bool * frontier_next, int num_vertices, int current_depth)
+{
+    int id = blockDim.x*blockIdx.x + threadIdx.x;
     if(id < shard->Eout)
     {
         VertexId s=shard->outEdges[id].src;
         VertexId d=shard->outEdges[id].dest;
-        if(frontier_cur[s] == true && shard->changed[s - shard->Vstart] == true)
+        if(shard->changed[s - shard->Vstart] == true)
         {
             frontier_next[d] = true;
         }
     }
-    __syncthreads();
 }
 #endif
-
 
 /*
 #ifndef __SCATTER__
@@ -330,7 +326,7 @@ int main(int argc, char * argv[])
         shard[i].inEdges = (edge_t *) malloc(MAX_NUM_INEDGES_SHARD*sizeof(edge_t));
         shard[i].outEdges = (edge_t *) malloc(MAX_NUM_OUTEDGES_SHARD*sizeof(edge_t));
 
-        shard[i].inUpdates = (VertexVal *) malloc(MAX_NUM_VERTICES_SHARD*sizeof(VertexVal));
+        shard[i].inUpdates = (VertexVal *) malloc(MAX_NUM_INEDGES_SHARD*sizeof(VertexVal));
         shard[i].changed = (bool *) malloc(MAX_NUM_VERTICES_SHARD*sizeof(bool));
     }
 
@@ -388,7 +384,7 @@ int main(int argc, char * argv[])
         CUDA_SAFE_CALL(cudaMalloc((void **)&outEdgesMap_dev[i], MAX_NUM_VERTICES_SHARD*sizeof(VertexId)));
         CUDA_SAFE_CALL(cudaMalloc((void **)&inEdges_dev[i], MAX_NUM_INEDGES_SHARD*sizeof(edge_t)));
         CUDA_SAFE_CALL(cudaMalloc((void **)&outEdges_dev[i], MAX_NUM_OUTEDGES_SHARD*sizeof(edge_t)));
-        CUDA_SAFE_CALL(cudaMalloc((void **)&inUpdates_dev[i], MAX_NUM_VERTICES_SHARD*sizeof(VertexVal)));
+        CUDA_SAFE_CALL(cudaMalloc((void **)&inUpdates_dev[i], MAX_NUM_INEDGES_SHARD*sizeof(VertexVal)));
         CUDA_SAFE_CALL(cudaMalloc((void **)&changed_dev[i], MAX_NUM_VERTICES_SHARD*sizeof(bool)));
     }
 
@@ -499,15 +495,14 @@ int main(int argc, char * argv[])
 
                 CUDA_SAFE_CALL(cudaEventRecord(start[j],str[j]));
                 gather<<<grid_inedge, threads_inedge, 0, str[j]>>> (shard_dev[j], vertices, frontier_cur, frontier_next, num_vertices, k);
-        //        find_frontier<<<grid_outedge, threads_outedge, 0, str[j]>>> (shard_dev[j], vertices, frontier_cur, frontier_next, num_vertices, k);
                 CUDA_SAFE_CALL(cudaStreamSynchronize(str[j]));
                 CUDA_SAFE_CALL(cudaEventRecord(stop[j],str[j]));
                 CUDA_SAFE_CALL(cudaEventSynchronize(stop[j]));
                 CUDA_SAFE_CALL(cudaEventElapsedTime(&diff,start[j],stop[j]));
                 tempTime += diff;
 
-		CUDA_SAFE_CALL(cudaMemcpyAsync(shard[sid].inUpdates, inUpdates_dev[j], MAX_NUM_VERTICES_SHARD*sizeof(VertexVal),cudaMemcpyDeviceToHost,str[j]));
-		CUDA_SAFE_CALL(cudaMemcpyAsync(shard[sid].changed, changed_dev[j], MAX_NUM_VERTICES_SHARD*sizeof(bool),cudaMemcpyDeviceToHost,str[j]));
+		CUDA_SAFE_CALL(cudaMemcpyAsync(shard[sid].inUpdates, inUpdates_dev[j], MAX_NUM_INEDGES_SHARD*sizeof(VertexVal),cudaMemcpyDeviceToHost,str[j]));
+		//CUDA_SAFE_CALL(cudaMemcpyAsync(shard[sid].changed, changed_dev[j], MAX_NUM_VERTICES_SHARD*sizeof(bool),cudaMemcpyDeviceToHost,str[j]));
             }
             time += tempTime;
         }
@@ -536,14 +531,14 @@ int main(int argc, char * argv[])
                 CUDA_SAFE_CALL(cudaMemcpyAsync(&((shard_dev[j])->inEdges), &(inEdges_dev[j]), sizeof(edge_t *),cudaMemcpyHostToDevice,str[j]));
                 CUDA_SAFE_CALL(cudaMemcpyAsync(outEdges_dev[j], shard[sid].outEdges, MAX_NUM_OUTEDGES_SHARD*sizeof(edge_t),cudaMemcpyHostToDevice,str[j]));
                 CUDA_SAFE_CALL(cudaMemcpyAsync(&((shard_dev[j])->outEdges), &(outEdges_dev[j]), sizeof(edge_t *),cudaMemcpyHostToDevice,str[j]));		
-		CUDA_SAFE_CALL(cudaMemcpyAsync(inUpdates_dev[j], shard[sid].inUpdates, MAX_NUM_VERTICES_SHARD*sizeof(VertexVal),cudaMemcpyHostToDevice,str[j]));
+		CUDA_SAFE_CALL(cudaMemcpyAsync(inUpdates_dev[j], shard[sid].inUpdates, MAX_NUM_INEDGES_SHARD*sizeof(VertexVal),cudaMemcpyHostToDevice,str[j]));
                 CUDA_SAFE_CALL(cudaMemcpyAsync(&((shard_dev[j])->inUpdates), &(inUpdates_dev[j]), sizeof(VertexVal *),cudaMemcpyHostToDevice,str[j]));
-		CUDA_SAFE_CALL(cudaMemcpyAsync(changed_dev[j], shard[sid].changed, MAX_NUM_VERTICES_SHARD*sizeof(bool),cudaMemcpyHostToDevice,str[j]));
+		//CUDA_SAFE_CALL(cudaMemcpyAsync(changed_dev[j], shard[sid].changed, MAX_NUM_VERTICES_SHARD*sizeof(bool),cudaMemcpyHostToDevice,str[j]));
                 CUDA_SAFE_CALL(cudaMemcpyAsync(&((shard_dev[j])->changed), &(changed_dev[j]), sizeof(bool *),cudaMemcpyHostToDevice,str[j]));
 
                 CUDA_SAFE_CALL(cudaEventRecord(start[j],str[j]));
-//                apply<<<grid_vertex, threads_vertex, 0, str[j]>>> (shard_dev[j], vertices, frontier_cur, frontier_next, num_vertices, k);
-                apply<<<grid_outedge, threads_outedge, 0, str[j]>>> (shard_dev[j], vertices, frontier_cur, frontier_next, num_vertices, k);
+                apply<<<grid_vertex, threads_vertex, 0, str[j]>>> (shard_dev[j], vertices, frontier_cur, frontier_next, num_vertices, k);
+		find_frontier<<<grid_outedge, threads_outedge, 0, str[j]>>> (shard_dev[j], vertices, frontier_cur, frontier_next, num_vertices, k);
                 CUDA_SAFE_CALL(cudaStreamSynchronize(str[j]));
                 CUDA_SAFE_CALL(cudaEventRecord(stop[j],str[j]));
                 CUDA_SAFE_CALL(cudaEventSynchronize(stop[j]));
@@ -607,8 +602,8 @@ int main(int argc, char * argv[])
                 break;
             }
         }
-
-        k++;
+        
+	k++;
     }while(over);
 
     CUDA_SAFE_CALL(cudaDeviceSynchronize());
@@ -617,11 +612,11 @@ int main(int argc, char * argv[])
     printf("Time to Pagerank : %f sec\n",((t2.tv_sec+t2.tv_usec*1.0e-6)-(t1.tv_sec+t1.tv_usec*1.0e-6)));
 
     printf("Number of iterations : %d\n",k);
-/*        CUDA_SAFE_CALL(cudaMemcpy(vertices_host, vertices, num_vertices*sizeof(vertex_t), cudaMemcpyDeviceToHost));
-          for(int i = 0; i < num_vertices; i++)
-          {
-          printf("Vertex %d Rank %f\n",i,vertices_host[i].val);
-          }*/
+    /*CUDA_SAFE_CALL(cudaMemcpy(vertices_host, vertices, num_vertices*sizeof(vertex_t), cudaMemcpyDeviceToHost));
+    for(int i = 0; i < num_vertices; i++)
+    {
+        printf("Vertex %d Rank %f\n",i,vertices_host[i].val);
+    }*/
 
     printf("Time: %f ms\n",time);
 
